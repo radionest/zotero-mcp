@@ -12,6 +12,7 @@ from markitdown import MarkItDown
 from pyzotero import zotero
 
 from zotero_mcp.utils import format_creators
+from zotero_mcp.hybrid_client import HybridZoteroClient
 
 # Load environment variables
 load_dotenv()
@@ -59,6 +60,64 @@ def get_zotero_client() -> zotero.Zotero:
         api_key=api_key,
         local=local,
     )
+
+
+def get_hybrid_zotero_client() -> HybridZoteroClient:
+    """
+    Get a hybrid Zotero client that intelligently uses both local and web APIs.
+    
+    Returns:
+        A configured HybridZoteroClient instance.
+        
+    Raises:
+        ValueError: If no client can be configured.
+    """
+    library_id = os.getenv("ZOTERO_LIBRARY_ID")
+    library_type = os.getenv("ZOTERO_LIBRARY_TYPE", "user")
+    api_key = os.getenv("ZOTERO_API_KEY")
+    use_local = os.getenv("ZOTERO_LOCAL", "").lower() in ["true", "yes", "1"]
+    use_hybrid = os.getenv("ZOTERO_HYBRID", "true").lower() in ["true", "yes", "1"]
+    
+    # If hybrid mode is disabled, fall back to regular client
+    if not use_hybrid:
+        return get_zotero_client()
+    
+    local_client = None
+    web_client = None
+    
+    # Try to create local client
+    if use_local:
+        try:
+            # For local API, default to user ID 0 if not specified
+            local_lib_id = library_id or "0"
+            local_client = zotero.Zotero(
+                library_id=local_lib_id,
+                library_type=library_type,
+                api_key=None,  # Not needed for local
+                local=True,
+            )
+        except Exception as e:
+            print(f"Warning: Could not create local client: {e}")
+    
+    # Try to create web client
+    if library_id and api_key:
+        try:
+            web_client = zotero.Zotero(
+                library_id=library_id,
+                library_type=library_type,
+                api_key=api_key,
+                local=False,
+            )
+        except Exception as e:
+            print(f"Warning: Could not create web client: {e}")
+    
+    # Create hybrid client with available adapters
+    if not local_client and not web_client:
+        raise ValueError(
+            "Could not create any Zotero client. Please check your configuration."
+        )
+    
+    return HybridZoteroClient(local_client=local_client, web_client=web_client)
 
 
 def format_item_metadata(item: Dict[str, Any], include_abstract: bool = True) -> str:
@@ -325,3 +384,59 @@ def convert_to_markdown(file_path: Union[str, Path]) -> str:
         return result.text_content
     except Exception as e:
         return f"Error converting file to markdown: {str(e)}"
+
+
+def get_hybrid_zotero_client() -> Union[HybridZoteroClient, zotero.Zotero]:
+    """
+    Create a hybrid Zotero client that uses both APIs when possible.
+    
+    Returns:
+        Either a HybridZoteroClient (if hybrid mode is enabled) or a regular Zotero client.
+        
+    Raises:
+        ValueError: If no client can be created.
+    """
+    library_id = os.getenv("ZOTERO_LIBRARY_ID")
+    library_type = os.getenv("ZOTERO_LIBRARY_TYPE", "user")
+    api_key = os.getenv("ZOTERO_API_KEY")
+    use_hybrid = os.getenv("ZOTERO_USE_HYBRID", "false").lower() in ["true", "yes", "1"]
+    
+    if not use_hybrid:
+        # Backward compatibility - use current logic
+        return get_zotero_client()
+    
+    # Create both clients if possible
+    local_client = None
+    web_client = None
+    
+    # Try to create local client
+    try:
+        local_client = zotero.Zotero(
+            library_id=library_id or "0",
+            library_type=library_type,
+            api_key=None,
+            local=True
+        )
+        # Test availability
+        local_client.collections(limit=1)
+    except Exception:
+        local_client = None
+    
+    # Create web client if credentials are available
+    if library_id and api_key:
+        try:
+            web_client = zotero.Zotero(
+                library_id=library_id,
+                library_type=library_type,
+                api_key=api_key,
+                local=False
+            )
+        except Exception:
+            web_client = None
+    
+    if local_client or web_client:
+        return HybridZoteroClient(local_client, web_client)
+    else:
+        raise ValueError(
+            "Unable to create any Zotero client. Please check your configuration."
+        )

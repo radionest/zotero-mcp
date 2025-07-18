@@ -19,7 +19,7 @@ from zotero_mcp.client import (
     format_item_metadata,
     generate_bibtex,
     get_attachment_details,
-    get_zotero_client,
+    get_hybrid_zotero_client,
 )
 from zotero_mcp.utils import format_creators
 
@@ -106,7 +106,7 @@ def search_items(
             tag = []
 
         ctx.info(f"Searching Zotero for '{query}'{tag_condition_str}")
-        zot = get_zotero_client()
+        zot = get_hybrid_zotero_client()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -197,7 +197,7 @@ def search_by_tag(
             return "Error: Tag cannot be empty"
 
         ctx.info(f"Searching Zotero for tag '{tag}'")
-        zot = get_zotero_client()
+        zot = get_hybrid_zotero_client()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -275,7 +275,7 @@ def get_item_metadata(
     """
     try:
         ctx.info(f"Fetching metadata for item {item_key} in {format} format")
-        zot = get_zotero_client()
+        zot = get_hybrid_zotero_client()
         
         item = zot.item(item_key)
         if not item:
@@ -312,7 +312,7 @@ def get_item_fulltext(
     """
     try:
         ctx.info(f"Fetching full text for item {item_key}")
-        zot = get_zotero_client()
+        zot = get_hybrid_zotero_client()
         
         # First get the item metadata
         item = zot.item(item_key)
@@ -386,7 +386,7 @@ def get_collections(
     """
     try:
         ctx.info("Fetching collections")
-        zot = get_zotero_client()
+        zot = get_hybrid_zotero_client()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -481,7 +481,7 @@ def get_collection_items(
     """
     try:
         ctx.info(f"Fetching items for collection {collection_key}")
-        zot = get_zotero_client()
+        zot = get_hybrid_zotero_client()
         
         # First get the collection details
         try:
@@ -549,7 +549,7 @@ def get_item_children(
     """
     try:
         ctx.info(f"Fetching children for item {item_key}")
-        zot = get_zotero_client()
+        zot = get_hybrid_zotero_client()
         
         # First get the parent item details
         try:
@@ -663,7 +663,7 @@ def get_tags(
     """
     try:
         ctx.info("Fetching tags")
-        zot = get_zotero_client()
+        zot = get_hybrid_zotero_client()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -717,7 +717,7 @@ def get_recent(
     """
     try:
         ctx.info(f"Fetching {limit} recent items")
-        zot = get_zotero_client()
+        zot = get_hybrid_zotero_client()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -798,7 +798,7 @@ def batch_update_tags(
             return "Error: You must specify either tags to add or tags to remove"
         
         ctx.info(f"Batch updating tags for items matching '{query}'")
-        zot = get_zotero_client()
+        zot = get_hybrid_zotero_client()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -917,7 +917,7 @@ def advanced_search(
             return "Error: No search conditions provided"
         
         ctx.info(f"Performing advanced search with {len(conditions)} conditions")
-        zot = get_zotero_client()
+        zot = get_hybrid_zotero_client()
         
         # Prepare search parameters
         params = {}
@@ -1072,7 +1072,7 @@ def get_annotations(
     """
     try:
         # Initialize Zotero client
-        zot = get_zotero_client()
+        zot = get_hybrid_zotero_client()
         
         # Prepare annotations list
         annotations = []
@@ -1375,7 +1375,7 @@ def get_notes(
     """
     try:
         ctx.info(f"Fetching notes{f' for item {item_key}' if item_key else ''}")
-        zot = get_zotero_client()
+        zot = get_hybrid_zotero_client()
         
         # Prepare search parameters
         params = {"itemType": "note"}
@@ -1465,7 +1465,7 @@ def search_notes(
             return "Error: Search query cannot be empty"
         
         ctx.info(f"Searching Zotero notes for '{query}'")
-        zot = get_zotero_client()
+        zot = get_hybrid_zotero_client()
         
         # Search for notes and annotations
         results = []
@@ -1620,7 +1620,7 @@ def create_note(
     """
     try:
         ctx.info(f"Creating note for item {item_key}")
-        zot = get_zotero_client()
+        zot = get_hybrid_zotero_client()
         
         # First verify the parent item exists
         try:
