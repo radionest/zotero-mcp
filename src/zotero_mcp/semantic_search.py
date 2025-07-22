@@ -18,6 +18,7 @@ from pyzotero import zotero
 from .chroma_client import ChromaClient, create_chroma_client
 from .client import get_zotero_client
 from .utils import format_creators
+from .rate_limiter import RateLimitedZoteroClient
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,8 @@ class ZoteroSemanticSearch:
             config_path: Path to configuration file
         """
         self.chroma_client = chroma_client or create_chroma_client(config_path)
-        self.zotero_client = get_zotero_client()
+        # Wrap Zotero client with rate limiter
+        self.zotero_client = RateLimitedZoteroClient(get_zotero_client())
         self.config_path = config_path
         
         # Load update configuration
@@ -244,7 +246,7 @@ class ZoteroSemanticSearch:
             logger.info("Fetching items from Zotero...")
             
             # Fetch items in batches to handle large libraries
-            batch_size = 100
+            batch_size = 50  # Reduced batch size to be more respectful of rate limits
             start = 0
             all_items = []
             
@@ -253,21 +255,35 @@ class ZoteroSemanticSearch:
                 if limit and len(all_items) >= limit:
                     break
                 
-                items = self.zotero_client.items(**batch_params)
-                if not items:
-                    break
-                
-                # Filter out attachments and notes by default
-                filtered_items = [
-                    item for item in items 
-                    if item.get("data", {}).get("itemType") not in ["attachment", "note"]
-                ]
-                
-                all_items.extend(filtered_items)
-                start += batch_size
-                
-                if len(items) < batch_size:
-                    break
+                try:
+                    # Rate-limited API call
+                    items = self.zotero_client.items(**batch_params)
+                    if not items:
+                        break
+                    
+                    # Filter out attachments and notes by default
+                    filtered_items = [
+                        item for item in items 
+                        if item.get("data", {}).get("itemType") not in ["attachment", "note"]
+                    ]
+                    
+                    all_items.extend(filtered_items)
+                    start += batch_size
+                    
+                    if len(items) < batch_size:
+                        break
+                    
+                    # Log progress for large libraries
+                    if start % 500 == 0:
+                        logger.info(f"Fetched {start} items so far...")
+                        
+                except Exception as e:
+                    logger.error(f"Error fetching items at offset {start}: {e}")
+                    # If we have some items, continue with what we have
+                    if all_items:
+                        logger.warning("Continuing with partially fetched items")
+                        break
+                    raise
             
             if limit:
                 all_items = all_items[:limit]

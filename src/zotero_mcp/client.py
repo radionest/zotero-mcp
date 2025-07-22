@@ -264,7 +264,15 @@ def get_attachment_details(
 
     # For regular items, look for child attachments
     try:
-        children = zot.children(item_key)
+        # Check if zot is already rate-limited
+        if hasattr(zot, '_client'):
+            # Already wrapped
+            children = zot.children(item_key)
+        else:
+            # Wrap with rate limiter
+            from .rate_limiter import RateLimitedZoteroClient
+            rate_limited_zot = RateLimitedZoteroClient(zot)
+            children = rate_limited_zot.children(item_key)
         
         # Group attachments by content type
         pdfs = []
