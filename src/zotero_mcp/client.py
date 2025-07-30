@@ -12,6 +12,7 @@ from markitdown import MarkItDown
 from pyzotero import zotero
 
 from zotero_mcp.utils import format_creators
+from zotero_mcp.storage import AttachmentStorage, create_storage
 
 # Load environment variables
 load_dotenv()
@@ -325,3 +326,35 @@ def convert_to_markdown(file_path: Union[str, Path]) -> str:
         return result.text_content
     except Exception as e:
         return f"Error converting file to markdown: {str(e)}"
+
+
+def get_storage_backend() -> Optional[AttachmentStorage]:
+    """
+    Get the configured attachment storage backend.
+    
+    Returns:
+        AttachmentStorage instance or None if not configured
+    """
+    # Check for storage configuration in environment variables
+    storage_type = os.getenv("ZOTERO_STORAGE_TYPE", "").lower()
+    
+    if not storage_type:
+        return None
+    
+    config = {"type": storage_type}
+    
+    if storage_type == "webdav":
+        config.update({
+            "url": os.getenv("ZOTERO_WEBDAV_URL", ""),
+            "username": os.getenv("ZOTERO_WEBDAV_USERNAME", ""),
+            "password": os.getenv("ZOTERO_WEBDAV_PASSWORD", ""),
+            "root_path": os.getenv("ZOTERO_WEBDAV_ROOT_PATH", "/zotero"),
+            "verify_ssl": os.getenv("ZOTERO_WEBDAV_VERIFY_SSL", "true").lower() == "true",
+        })
+    elif storage_type == "yandex":
+        config.update({
+            "token": os.getenv("ZOTERO_YANDEX_TOKEN", ""),
+            "root_path": os.getenv("ZOTERO_YANDEX_ROOT_PATH", "/zotero"),
+        })
+    
+    return create_storage(config)

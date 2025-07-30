@@ -1,0 +1,5 @@
+Требуется настроить получение attachments из webdav сервера. 
+Нужна гибкая настройка для любых серверов. 
+В частности yandex disk хранит данные в папке zotero в коревом каталоге где просто лежит пачка zip архивов attachments, которые именуются по их id.
+Библиотека для яндекс диска https://pypi.org/project/yadisk/
+Инструкции к универсальной webdav библиотеке python https://pypi.org/project/webdavclient/1.0.5/

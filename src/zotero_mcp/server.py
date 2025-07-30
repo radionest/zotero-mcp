@@ -342,6 +342,21 @@ def get_item_fulltext(
         try:
             ctx.info(f"Attempting to download and convert attachment {attachment.key}")
             
+            # Try storage backend first
+            from zotero_mcp.client import get_storage_backend
+            storage = get_storage_backend()
+            
+            if storage and storage.exists(attachment.key):
+                ctx.info(f"Trying to retrieve attachment from {storage.get_storage_info()['type']} storage")
+                file_path = storage.get_attachment(attachment.key)
+                if file_path and file_path.exists():
+                    ctx.info(f"Retrieved file from storage, converting to markdown")
+                    converted_text = convert_to_markdown(file_path)
+                    return f"{metadata}\n\n---\n\n## Full Text\n\n{converted_text}"
+            
+            # Fall back to direct download from Zotero
+            ctx.info("Trying direct download from Zotero")
+            
             # Download the file to a temporary location
             import tempfile
             import os

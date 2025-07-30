@@ -28,6 +28,9 @@ dependencies = [
     "sentence-transformers>=2.2.0",
     "openai>=1.0.0",
     "google-genai>=0.7.0",
+    "nodeenv>=1.9.1",
+    "webdavclient3>=3.14.0",
+    "yadisk>=3.1.0",
 ]
 
 [project.optional-dependencies]
