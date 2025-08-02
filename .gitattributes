@@ -1,0 +1,60 @@
+# Auto detect text files and perform LF normalization
+* text=auto eol=lf
+
+# Text files
+*.py text
+*.pyi text
+*.md text
+*.yml text
+*.yaml text
+*.json text
+*.toml text
+*.ini text
+*.cfg text
+*.txt text
+*.rst text
+
+# Shell scripts
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Windows scripts
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Documentation
+*.md text
+*.rst text
+*.txt text
+README text
+LICENSE text
+AUTHORS text
+CHANGELOG text
+CONTRIBUTING text
+
+# Configuration
+.gitignore text
+.gitattributes text
+.editorconfig text
+.pre-commit-config.yaml text
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.pyc binary
+*.pyo binary
+*.pyd binary
+*.so binary
+*.dylib binary
+
+# Jupyter notebooks
+*.ipynb filter=nbstripout
+
+# Diff settings
+*.py diff=python
+*.md diff=markdown
