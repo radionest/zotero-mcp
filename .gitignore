@@ -26,6 +26,8 @@ htmlcov/
 # IDE specific files
 .idea/
 .vscode/
+.claude/
+CLAUDE.md
 *.swp
 *.swo
 
@@ -36,3 +38,4 @@ Thumbs.db
 # Environment variables
 .env
 .env.local
+
