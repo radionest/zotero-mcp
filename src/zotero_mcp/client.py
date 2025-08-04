@@ -12,7 +12,14 @@ from markitdown import MarkItDown
 from pyzotero import zotero
 
 from zotero_mcp.utils import format_creators
-from zotero_mcp.hybrid_client import HybridZoteroClient
+
+# Try to import feature flags (fork-only)
+try:
+    from zotero_mcp.feature_flags import is_feature_enabled
+except ImportError:
+    # Feature flags not available - we're in upstream
+    def is_feature_enabled(feature: str) -> bool:
+        return False
 
 # Load environment variables
 load_dotenv()
@@ -28,16 +35,26 @@ class AttachmentDetails:
     content_type: str
 
 
-def get_zotero_client() -> zotero.Zotero:
+def get_zotero_client() -> Union[zotero.Zotero, Any]:  # Any is for HybridZoteroClient
     """
     Get authenticated Zotero client using environment variables.
     
     Returns:
-        A configured Zotero client instance.
+        A configured Zotero client instance (regular or hybrid based on feature flag).
         
     Raises:
         ValueError: If required environment variables are missing.
     """
+    # Check if hybrid client feature is enabled
+    if is_feature_enabled("ZOTERO_HYBRID_CLIENT"):
+        try:
+            from zotero_mcp.hybrid_client import HybridZoteroClient
+            return _get_hybrid_client()
+        except ImportError:
+            # Hybrid client not available, fall back to regular
+            pass
+    
+    # Regular client logic
     library_id = os.getenv("ZOTERO_LIBRARY_ID")
     library_type = os.getenv("ZOTERO_LIBRARY_TYPE", "user")
     api_key = os.getenv("ZOTERO_API_KEY")
@@ -62,25 +79,20 @@ def get_zotero_client() -> zotero.Zotero:
     )
 
 
-def get_hybrid_zotero_client() -> HybridZoteroClient:
+def _get_hybrid_client():
     """
-    Get a hybrid Zotero client that intelligently uses both local and web APIs.
+    Helper function to create hybrid client when feature is enabled.
+    FORK-ONLY: This function is only used when ZOTERO_HYBRID_CLIENT flag is enabled.
     
     Returns:
-        A configured HybridZoteroClient instance.
-        
-    Raises:
-        ValueError: If no client can be configured.
+        HybridZoteroClient instance
     """
+    from zotero_mcp.hybrid_client import HybridZoteroClient
+    
     library_id = os.getenv("ZOTERO_LIBRARY_ID")
     library_type = os.getenv("ZOTERO_LIBRARY_TYPE", "user")
     api_key = os.getenv("ZOTERO_API_KEY")
     use_local = os.getenv("ZOTERO_LOCAL", "").lower() in ["true", "yes", "1"]
-    use_hybrid = os.getenv("ZOTERO_HYBRID", "true").lower() in ["true", "yes", "1"]
-    
-    # If hybrid mode is disabled, fall back to regular client
-    if not use_hybrid:
-        return get_zotero_client()
     
     local_client = None
     web_client = None
@@ -88,16 +100,15 @@ def get_hybrid_zotero_client() -> HybridZoteroClient:
     # Try to create local client
     if use_local:
         try:
-            # For local API, default to user ID 0 if not specified
             local_lib_id = library_id or "0"
             local_client = zotero.Zotero(
                 library_id=local_lib_id,
                 library_type=library_type,
-                api_key=None,  # Not needed for local
+                api_key=None,
                 local=True,
             )
-        except Exception as e:
-            print(f"Warning: Could not create local client: {e}")
+        except Exception:
+            pass
     
     # Try to create web client
     if library_id and api_key:
@@ -108,10 +119,9 @@ def get_hybrid_zotero_client() -> HybridZoteroClient:
                 api_key=api_key,
                 local=False,
             )
-        except Exception as e:
-            print(f"Warning: Could not create web client: {e}")
+        except Exception:
+            pass
     
-    # Create hybrid client with available adapters
     if not local_client and not web_client:
         raise ValueError(
             "Could not create any Zotero client. Please check your configuration."
@@ -296,13 +306,13 @@ def generate_bibtex(item: Dict[str, Any]) -> str:
 
 
 def get_attachment_details(
-    zot: zotero.Zotero, item: Dict[str, Any]
+    zot: Union[zotero.Zotero, Any], item: Dict[str, Any]
 ) -> Optional[AttachmentDetails]:
     """
     Get attachment details for a Zotero item, finding the most relevant attachment.
     
     Args:
-        zot: A Zotero client instance.
+        zot: A Zotero client instance (may be wrapped with rate limiter).
         item: A Zotero item dictionary.
         
     Returns:
@@ -323,6 +333,15 @@ def get_attachment_details(
 
     # For regular items, look for child attachments
     try:
+        # Apply rate limiting if feature is enabled
+        if is_feature_enabled("ZOTERO_RATE_LIMITER") and not hasattr(zot, '_client'):
+            try:
+                from zotero_mcp.rate_limiter import RateLimitedZoteroClient
+                zot = RateLimitedZoteroClient(zot)
+            except ImportError:
+                # Rate limiter not available, continue without it
+                pass
+        
         children = zot.children(item_key)
         
         # Group attachments by content type
@@ -386,57 +405,43 @@ def convert_to_markdown(file_path: Union[str, Path]) -> str:
         return f"Error converting file to markdown: {str(e)}"
 
 
-def get_hybrid_zotero_client() -> Union[HybridZoteroClient, zotero.Zotero]:
+def get_storage_backend() -> Optional[Any]:
     """
-    Create a hybrid Zotero client that uses both APIs when possible.
+    Get the configured attachment storage backend.
+    FORK-ONLY: This function is only used when ZOTERO_WEBDAV_STORAGE flag is enabled.
     
     Returns:
-        Either a HybridZoteroClient (if hybrid mode is enabled) or a regular Zotero client.
-        
-    Raises:
-        ValueError: If no client can be created.
+        AttachmentStorage instance or None if not configured
     """
-    library_id = os.getenv("ZOTERO_LIBRARY_ID")
-    library_type = os.getenv("ZOTERO_LIBRARY_TYPE", "user")
-    api_key = os.getenv("ZOTERO_API_KEY")
-    use_hybrid = os.getenv("ZOTERO_USE_HYBRID", "false").lower() in ["true", "yes", "1"]
+    if not is_feature_enabled("ZOTERO_WEBDAV_STORAGE"):
+        return None
     
-    if not use_hybrid:
-        # Backward compatibility - use current logic
-        return get_zotero_client()
-    
-    # Create both clients if possible
-    local_client = None
-    web_client = None
-    
-    # Try to create local client
     try:
-        local_client = zotero.Zotero(
-            library_id=library_id or "0",
-            library_type=library_type,
-            api_key=None,
-            local=True
-        )
-        # Test availability
-        local_client.collections(limit=1)
-    except Exception:
-        local_client = None
-    
-    # Create web client if credentials are available
-    if library_id and api_key:
-        try:
-            web_client = zotero.Zotero(
-                library_id=library_id,
-                library_type=library_type,
-                api_key=api_key,
-                local=False
-            )
-        except Exception:
-            web_client = None
-    
-    if local_client or web_client:
-        return HybridZoteroClient(local_client, web_client)
-    else:
-        raise ValueError(
-            "Unable to create any Zotero client. Please check your configuration."
-        )
+        from zotero_mcp.storage import create_storage
+        
+        # Check for storage configuration in environment variables
+        storage_type = os.getenv("ZOTERO_STORAGE_TYPE", "").lower()
+        
+        if not storage_type:
+            return None
+        
+        config = {"type": storage_type}
+        
+        if storage_type == "webdav":
+            config.update({
+                "url": os.getenv("ZOTERO_WEBDAV_URL", ""),
+                "username": os.getenv("ZOTERO_WEBDAV_USERNAME", ""),
+                "password": os.getenv("ZOTERO_WEBDAV_PASSWORD", ""),
+                "root_path": os.getenv("ZOTERO_WEBDAV_ROOT_PATH", "/zotero"),
+                "verify_ssl": os.getenv("ZOTERO_WEBDAV_VERIFY_SSL", "true").lower() == "true",
+            })
+        elif storage_type == "yandex":
+            config.update({
+                "token": os.getenv("ZOTERO_YANDEX_TOKEN", ""),
+                "root_path": os.getenv("ZOTERO_YANDEX_ROOT_PATH", "/zotero"),
+            })
+        
+        return create_storage(config)
+    except ImportError:
+        # Storage module not available
+        return None

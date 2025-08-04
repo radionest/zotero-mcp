@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# Pre-push hook to prevent direct pushes to main
+protected_branch='main'
+current_branch=$(git symbolic-ref HEAD | sed -e 's,.*/\(.*\),\1,')
+
+if [ "$current_branch" = "$protected_branch" ]; then
+    echo "❌ Direct push to main branch is forbidden!"
+    echo "Main branch is sacred. Please use pull requests."
+    echo ""
+    echo "To push your changes:"
+    echo "1. Create a feature branch: git checkout -b feature/your-feature"
+    echo "2. Push the feature branch: git push origin feature/your-feature"
+    echo "3. Create a pull request to merge into dev, then dev into main"
+    exit 1
+fi
