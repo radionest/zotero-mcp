@@ -19,7 +19,8 @@ from zotero_mcp.client import (
     format_item_metadata,
     generate_bibtex,
     get_attachment_details,
-    get_zotero_client
+    get_zotero_client,
+    get_hybrid_zotero_client
 )
 from zotero_mcp.utils import format_creators
 
