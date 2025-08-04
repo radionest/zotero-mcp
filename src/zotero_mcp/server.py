@@ -23,36 +23,6 @@ from zotero_mcp.client import (
 )
 from zotero_mcp.utils import format_creators
 
-# Try to import feature flags (fork-only)
-try:
-    from zotero_mcp.feature_flags import is_feature_enabled
-except ImportError:
-    # Feature flags not available - we're in upstream
-    def is_feature_enabled(feature: str) -> bool:
-        return False
-
-
-def _get_zotero_client_with_features():
-    """
-    Get Zotero client with optional feature wrappers.
-    FORK-ONLY: This applies rate limiting if feature is enabled.
-    
-    Returns:
-        Zotero client instance (possibly wrapped)
-    """
-    client = get_zotero_client()
-    
-    # Apply rate limiting if feature is enabled
-    if is_feature_enabled("ZOTERO_RATE_LIMITER"):
-        try:
-            from zotero_mcp.rate_limiter import RateLimitedZoteroClient
-            return RateLimitedZoteroClient(client)
-        except ImportError:
-            # Rate limiter not available, return unwrapped client
-            pass
-    
-    return client
-
 
 @asynccontextmanager
 async def server_lifespan(server: FastMCP):
@@ -136,7 +106,7 @@ def search_items(
             tag = []
 
         ctx.info(f"Searching Zotero for '{query}'{tag_condition_str}")
-        zot = _get_zotero_client_with_features()
+        zot = get_hybrid_zotero_client()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -227,7 +197,7 @@ def search_by_tag(
             return "Error: Tag cannot be empty"
 
         ctx.info(f"Searching Zotero for tag '{tag}'")
-        zot = _get_zotero_client_with_features()
+        zot = get_hybrid_zotero_client()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -305,7 +275,7 @@ def get_item_metadata(
     """
     try:
         ctx.info(f"Fetching metadata for item {item_key} in {format} format")
-        zot = _get_zotero_client_with_features()
+        zot = get_hybrid_zotero_client()
         
         item = zot.item(item_key)
         if not item:
@@ -342,7 +312,7 @@ def get_item_fulltext(
     """
     try:
         ctx.info(f"Fetching full text for item {item_key}")
-        zot = _get_zotero_client_with_features()
+        zot = get_hybrid_zotero_client()
         
         # First get the item metadata
         item = zot.item(item_key)
@@ -371,22 +341,6 @@ def get_item_fulltext(
         # If we couldn't get indexed full text, try to download and convert the file
         try:
             ctx.info(f"Attempting to download and convert attachment {attachment.key}")
-            
-            # Try storage backend first if WebDAV feature is enabled
-            if is_feature_enabled("ZOTERO_WEBDAV_STORAGE"):
-                from zotero_mcp.client import get_storage_backend
-                storage = get_storage_backend()
-                
-                if storage and storage.exists(attachment.key):
-                    ctx.info(f"Trying to retrieve attachment from {storage.get_storage_info()['type']} storage")
-                    file_path = storage.get_attachment(attachment.key)
-                    if file_path and file_path.exists():
-                        ctx.info(f"Retrieved file from storage, converting to markdown")
-                        converted_text = convert_to_markdown(file_path)
-                        return f"{metadata}\n\n---\n\n## Full Text\n\n{converted_text}"
-            
-            # Fall back to direct download from Zotero
-            ctx.info("Trying direct download from Zotero")
             
             # Download the file to a temporary location
             import tempfile
@@ -432,7 +386,7 @@ def get_collections(
     """
     try:
         ctx.info("Fetching collections")
-        zot = _get_zotero_client_with_features()
+        zot = get_hybrid_zotero_client()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -527,7 +481,7 @@ def get_collection_items(
     """
     try:
         ctx.info(f"Fetching items for collection {collection_key}")
-        zot = _get_zotero_client_with_features()
+        zot = get_hybrid_zotero_client()
         
         # First get the collection details
         try:
@@ -595,7 +549,7 @@ def get_item_children(
     """
     try:
         ctx.info(f"Fetching children for item {item_key}")
-        zot = _get_zotero_client_with_features()
+        zot = get_hybrid_zotero_client()
         
         # First get the parent item details
         try:
@@ -709,7 +663,7 @@ def get_tags(
     """
     try:
         ctx.info("Fetching tags")
-        zot = _get_zotero_client_with_features()
+        zot = get_hybrid_zotero_client()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -763,7 +717,7 @@ def get_recent(
     """
     try:
         ctx.info(f"Fetching {limit} recent items")
-        zot = _get_zotero_client_with_features()
+        zot = get_hybrid_zotero_client()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -817,8 +771,8 @@ def get_recent(
 )
 def batch_update_tags(
     query: str,
-    add_tags: Optional[Union[List[str], str]] = None,
-    remove_tags: Optional[Union[List[str], str]] = None,
+    add_tags: Optional[List[str]] = None,
+    remove_tags: Optional[List[str]] = None,
     limit: Union[int, str] = 50,
     *,
     ctx: Context
@@ -828,8 +782,8 @@ def batch_update_tags(
     
     Args:
         query: Search query to find items to update
-        add_tags: List of tags to add to matched items (can be list or JSON string)
-        remove_tags: List of tags to remove from matched items (can be list or JSON string)
+        add_tags: List of tags to add to matched items
+        remove_tags: List of tags to remove from matched items
         limit: Maximum number of items to process
         ctx: MCP context
     
@@ -843,30 +797,8 @@ def batch_update_tags(
         if not add_tags and not remove_tags:
             return "Error: You must specify either tags to add or tags to remove"
         
-        # Debug logging... commented out for now but could be useful in future.
-        # ctx.info(f"add_tags type: {type(add_tags)}, value: {add_tags}")
-        # ctx.info(f"remove_tags type: {type(remove_tags)}, value: {remove_tags}")
-        
-        # Handle case where add_tags might be a JSON string instead of list
-        if add_tags and isinstance(add_tags, str):
-            try:
-                import json
-                add_tags = json.loads(add_tags)
-                ctx.info(f"Parsed add_tags from JSON string: {add_tags}")
-            except json.JSONDecodeError:
-                return f"Error: add_tags appears to be malformed JSON string: {add_tags}"
-        
-        # Handle case where remove_tags might be a JSON string instead of list  
-        if remove_tags and isinstance(remove_tags, str):
-            try:
-                import json
-                remove_tags = json.loads(remove_tags)
-                ctx.info(f"Parsed remove_tags from JSON string: {remove_tags}")
-            except json.JSONDecodeError:
-                return f"Error: remove_tags appears to be malformed JSON string: {remove_tags}"
-        
         ctx.info(f"Batch updating tags for items matching '{query}'")
-        zot = _get_zotero_client_with_features()
+        zot = get_hybrid_zotero_client()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -919,18 +851,10 @@ def batch_update_tags(
                         needs_update = True
             
             # Update the item if needed
-            # Since we are logging errors we might as well log the update.
             if needs_update:
-                try:
-                    item["data"]["tags"] = current_tags
-                    ctx.info(f"Updating item {item.get('key', 'unknown')} with tags: {current_tags}")
-                    result = zot.update_item(item)
-                    ctx.info(f"Update result: {result}")
-                    updated_count += 1
-                except Exception as e:
-                    ctx.error(f"Failed to update item {item.get('key', 'unknown')}: {str(e)}")
-                    # Continue with other items instead of failing completely
-                    skipped_count += 1
+                item["data"]["tags"] = current_tags
+                zot.update_item(item)
+                updated_count += 1
             else:
                 skipped_count += 1
         
@@ -993,7 +917,7 @@ def advanced_search(
             return "Error: No search conditions provided"
         
         ctx.info(f"Performing advanced search with {len(conditions)} conditions")
-        zot = _get_zotero_client_with_features()
+        zot = get_hybrid_zotero_client()
         
         # Prepare search parameters
         params = {}
@@ -1148,7 +1072,7 @@ def get_annotations(
     """
     try:
         # Initialize Zotero client
-        zot = _get_zotero_client_with_features()
+        zot = get_hybrid_zotero_client()
         
         # Prepare annotations list
         annotations = []
@@ -1451,7 +1375,7 @@ def get_notes(
     """
     try:
         ctx.info(f"Fetching notes{f' for item {item_key}' if item_key else ''}")
-        zot = _get_zotero_client_with_features()
+        zot = get_hybrid_zotero_client()
         
         # Prepare search parameters
         params = {"itemType": "note"}
@@ -1541,7 +1465,7 @@ def search_notes(
             return "Error: Search query cannot be empty"
         
         ctx.info(f"Searching Zotero notes for '{query}'")
-        zot = _get_zotero_client_with_features()
+        zot = get_hybrid_zotero_client()
         
         # Search for notes and annotations
         results = []
@@ -1696,7 +1620,7 @@ def create_note(
     """
     try:
         ctx.info(f"Creating note for item {item_key}")
-        zot = _get_zotero_client_with_features()
+        zot = get_hybrid_zotero_client()
         
         # First verify the parent item exists
         try:

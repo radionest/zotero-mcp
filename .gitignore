@@ -26,8 +26,6 @@ htmlcov/
 # IDE specific files
 .idea/
 .vscode/
-.claude/
-CLAUDE.md
 *.swp
 *.swo
 
@@ -38,9 +36,3 @@ Thumbs.db
 # Environment variables
 .env
 .env.local
-
-# Fork-specific files (never commit to upstream)
-src/zotero_mcp/feature_flags.py
-config_local.py
-
-uv.lock
