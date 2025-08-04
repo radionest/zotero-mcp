@@ -15,11 +15,25 @@ from zotero_mcp.utils import format_creators
 
 # Try to import feature flags (fork-only)
 try:
-    from zotero_mcp.feature_flags import is_feature_enabled
+    from zotero_mcp.feature_flags import (
+        is_feature_enabled,
+        get_feature_config,
+        FEATURE_HYBRID_CLIENT,
+        FEATURE_RATE_LIMITER,
+        FEATURE_WEBDAV_STORAGE,
+    )
 except ImportError:
     # Feature flags not available - we're in upstream
     def is_feature_enabled(feature: str) -> bool:
         return False
+    
+    def get_feature_config(feature: str) -> Optional[Dict[str, Any]]:
+        return None
+    
+    # Feature constants for consistency
+    FEATURE_HYBRID_CLIENT = "ZOTERO_HYBRID_CLIENT"
+    FEATURE_RATE_LIMITER = "ZOTERO_RATE_LIMITER"
+    FEATURE_WEBDAV_STORAGE = "ZOTERO_WEBDAV_STORAGE"
 
 # Load environment variables
 load_dotenv()
@@ -46,7 +60,7 @@ def get_zotero_client() -> Union[zotero.Zotero, Any]:  # Any is for HybridZotero
         ValueError: If required environment variables are missing.
     """
     # Check if hybrid client feature is enabled
-    if is_feature_enabled("ZOTERO_HYBRID_CLIENT"):
+    if is_feature_enabled(FEATURE_HYBRID_CLIENT):
         try:
             from zotero_mcp.hybrid_client import HybridZoteroClient
             return _get_hybrid_client()
@@ -334,7 +348,7 @@ def get_attachment_details(
     # For regular items, look for child attachments
     try:
         # Apply rate limiting if feature is enabled
-        if is_feature_enabled("ZOTERO_RATE_LIMITER") and not hasattr(zot, '_client'):
+        if is_feature_enabled(FEATURE_RATE_LIMITER) and not hasattr(zot, '_client'):
             try:
                 from zotero_mcp.rate_limiter import RateLimitedZoteroClient
                 zot = RateLimitedZoteroClient(zot)
@@ -413,7 +427,7 @@ def get_storage_backend() -> Optional[Any]:
     Returns:
         AttachmentStorage instance or None if not configured
     """
-    if not is_feature_enabled("ZOTERO_WEBDAV_STORAGE"):
+    if not is_feature_enabled(FEATURE_WEBDAV_STORAGE):
         return None
     
     try:

@@ -73,6 +73,7 @@ def remove_fork_specific_files(repo_root: Path) -> list:
     
     fork_files = [
         "src/zotero_mcp/feature_flags.py",
+        "FEATURE_FLAGS.md",
         "config_local.py",
         "test_rate_limiter.py",  # If it's a fork-only test
     ]

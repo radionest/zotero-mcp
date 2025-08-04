@@ -25,11 +25,25 @@ from zotero_mcp.utils import format_creators
 
 # Try to import feature flags (fork-only)
 try:
-    from zotero_mcp.feature_flags import is_feature_enabled
+    from zotero_mcp.feature_flags import (
+        is_feature_enabled,
+        get_feature_config,
+        FEATURE_HYBRID_CLIENT,
+        FEATURE_RATE_LIMITER,
+        FEATURE_WEBDAV_STORAGE,
+    )
 except ImportError:
     # Feature flags not available - we're in upstream
     def is_feature_enabled(feature: str) -> bool:
         return False
+    
+    def get_feature_config(feature: str) -> Optional[Dict[str, Any]]:
+        return None
+    
+    # Feature constants for consistency
+    FEATURE_HYBRID_CLIENT = "ZOTERO_HYBRID_CLIENT"
+    FEATURE_RATE_LIMITER = "ZOTERO_RATE_LIMITER"
+    FEATURE_WEBDAV_STORAGE = "ZOTERO_WEBDAV_STORAGE"
 
 
 def _get_zotero_client_with_features():
@@ -43,7 +57,7 @@ def _get_zotero_client_with_features():
     client = get_zotero_client()
     
     # Apply rate limiting if feature is enabled
-    if is_feature_enabled("ZOTERO_RATE_LIMITER"):
+    if is_feature_enabled(FEATURE_RATE_LIMITER):
         try:
             from zotero_mcp.rate_limiter import RateLimitedZoteroClient
             return RateLimitedZoteroClient(client)
@@ -373,7 +387,7 @@ def get_item_fulltext(
             ctx.info(f"Attempting to download and convert attachment {attachment.key}")
             
             # Try storage backend first if WebDAV feature is enabled
-            if is_feature_enabled("ZOTERO_WEBDAV_STORAGE"):
+            if is_feature_enabled(FEATURE_WEBDAV_STORAGE):
                 from zotero_mcp.client import get_storage_backend
                 storage = get_storage_backend()
                 
