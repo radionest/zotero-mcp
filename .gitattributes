@@ -1,0 +1,7 @@
+# Prevent Claude files from being merged into main
+CLAUDE.md merge=ours
+.claude/** merge=ours
+
+# Mark these files for special handling
+CLAUDE.md filter=claude-filter
+.claude/** filter=claude-filter
