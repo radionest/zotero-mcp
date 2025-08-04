@@ -1,7 +1,0 @@
-# Feature branch specific files
-# These files should exist in feature branches but not in main
-# DO NOT add these to main .gitignore
-
-# Claude-specific files
-CLAUDE.md
-.claude/
