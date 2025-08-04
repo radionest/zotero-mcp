@@ -20,6 +20,7 @@ from zotero_mcp.client import (
     generate_bibtex,
     get_attachment_details,
     get_zotero_client,
+    get_hybrid_zotero_client,
 )
 from zotero_mcp.utils import format_creators
 
@@ -49,12 +50,17 @@ except ImportError:
 def _get_zotero_client_with_features():
     """
     Get Zotero client with optional feature wrappers.
-    FORK-ONLY: This applies rate limiting if feature is enabled.
+    FORK-ONLY: This applies rate limiting and hybrid client features if enabled.
     
     Returns:
         Zotero client instance (possibly wrapped)
     """
-    client = get_zotero_client()
+    # Check if hybrid client should be used
+    if is_feature_enabled(FEATURE_HYBRID_CLIENT):
+        # Use the hybrid client getter which handles the feature flag
+        client = get_hybrid_zotero_client()
+    else:
+        client = get_zotero_client()
     
     # Apply rate limiting if feature is enabled
     if is_feature_enabled(FEATURE_RATE_LIMITER):

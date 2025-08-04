@@ -144,6 +144,22 @@ def _get_hybrid_client():
     return HybridZoteroClient(local_client=local_client, web_client=web_client)
 
 
+def get_hybrid_zotero_client():
+    """
+    Get a hybrid Zotero client that uses both local and web APIs.
+    This is a wrapper that respects feature flags.
+    
+    Returns:
+        Either a HybridZoteroClient or regular Zotero client based on configuration.
+    """
+    # If hybrid client feature is enabled, use the internal helper
+    if is_feature_enabled(FEATURE_HYBRID_CLIENT):
+        return _get_hybrid_client()
+    
+    # Otherwise, return regular client
+    return get_zotero_client()
+
+
 def format_item_metadata(item: Dict[str, Any], include_abstract: bool = True) -> str:
     """
     Format a Zotero item's metadata as markdown.
