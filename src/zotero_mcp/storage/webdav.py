@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from webdavclient3 import Client
+from webdav3.client import Client
 
 from .base import AttachmentStorage
 
