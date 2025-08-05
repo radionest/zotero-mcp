@@ -137,7 +137,7 @@ class LocalAPIAdapter(ZoteroAPIAdapter):
         """Check if local Zotero is running"""
         if self._available is not None:
             return self._available
-            
+    
         try:
             # Try a simple operation
             self.client.collections(limit=1)

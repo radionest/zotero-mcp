@@ -3,6 +3,7 @@ Zotero client wrapper for MCP server.
 """
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -121,7 +122,8 @@ def _get_hybrid_client():
                 api_key=None,
                 local=True,
             )
-        except Exception:
+        except Exception as e:
+            print('Error while intialization of local client',e)
             pass
     
     # Try to create web client
@@ -133,10 +135,12 @@ def _get_hybrid_client():
                 api_key=api_key,
                 local=False,
             )
-        except Exception:
+        except Exception as e:
+            print('Error while intialization of web client',e)
             pass
     
     if not local_client and not web_client:
+        
         raise ValueError(
             "Could not create any Zotero client. Please check your configuration."
         )
