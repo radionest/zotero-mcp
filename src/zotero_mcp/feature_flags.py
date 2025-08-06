@@ -45,12 +45,14 @@ class FeatureConfig(TypedDict):
 FEATURE_HYBRID_CLIENT = "ZOTERO_HYBRID_CLIENT"
 FEATURE_RATE_LIMITER = "ZOTERO_RATE_LIMITER"
 FEATURE_WEBDAV_STORAGE = "ZOTERO_WEBDAV_STORAGE"
+FEATURE_RESPONSE_CHUNKING = "ZOTERO_RESPONSE_CHUNKING"
 
 # All available features
 AVAILABLE_FEATURES = {
     FEATURE_HYBRID_CLIENT,
     FEATURE_RATE_LIMITER,
     FEATURE_WEBDAV_STORAGE,
+    FEATURE_RESPONSE_CHUNKING,
 }
 
 
@@ -193,3 +195,8 @@ def is_rate_limiter_enabled() -> bool:
 def is_webdav_enabled() -> bool:
     """Check if WebDAV storage is enabled."""
     return is_feature_enabled(FEATURE_WEBDAV_STORAGE)
+
+
+def is_response_chunking_enabled() -> bool:
+    """Check if response chunking is enabled."""
+    return is_feature_enabled(FEATURE_RESPONSE_CHUNKING)

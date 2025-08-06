@@ -34,6 +34,7 @@ try:
         FEATURE_HYBRID_CLIENT,
         FEATURE_RATE_LIMITER,
         FEATURE_WEBDAV_STORAGE,
+        FEATURE_RESPONSE_CHUNKING,
     )
 except ImportError:
     # Feature flags not available - we're in upstream
@@ -47,6 +48,7 @@ except ImportError:
     FEATURE_HYBRID_CLIENT = "ZOTERO_HYBRID_CLIENT"
     FEATURE_RATE_LIMITER = "ZOTERO_RATE_LIMITER"
     FEATURE_WEBDAV_STORAGE = "ZOTERO_WEBDAV_STORAGE"
+    FEATURE_RESPONSE_CHUNKING = "ZOTERO_RESPONSE_CHUNKING"
 
 
 def _get_zotero_client_with_features():
@@ -208,27 +210,28 @@ def search_items(
         # Join the output to create final response
         response = "\n".join(output)
         
-        # Check if response needs chunking
-        chunker = get_response_chunker()
-        if chunker.should_chunk(response):
-            ctx.info(f"Response exceeds token limit ({estimate_tokens(response)} tokens), chunking...")
-            chunked_response = chunker.chunk_response(response, context={"type": "search_results"})
-            
-            # Format chunked response for MCP
-            if chunked_response.get("chunked"):
-                chunk_info = [
-                    "# ⚠️ Response Chunked",
-                    f"This response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
-                    f"Current chunk: 1 of {chunked_response['total_chunks']}",
-                    "",
-                    "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
-                    f"Continuation token: `{chunked_response.get('continuation_token')}`",
-                    "",
-                    "---",
-                    "",
-                    chunked_response["content"]
-                ]
-                return "\n".join(chunk_info)
+        # Check if response needs chunking (only if feature is enabled)
+        if is_feature_enabled(FEATURE_RESPONSE_CHUNKING):
+            chunker = get_response_chunker()
+            if chunker.should_chunk(response):
+                ctx.info(f"Response exceeds token limit ({estimate_tokens(response)} tokens), chunking...")
+                chunked_response = chunker.chunk_response(response, context={"type": "search_results"})
+                
+                # Format chunked response for MCP
+                if chunked_response.get("chunked"):
+                    chunk_info = [
+                        "# ⚠️ Response Chunked",
+                        f"This response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                        f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                        "",
+                        "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                        f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                        "",
+                        "---",
+                        "",
+                        chunked_response["content"]
+                    ]
+                    return "\n".join(chunk_info)
         
         return response
     
@@ -413,27 +416,28 @@ def get_item_fulltext(
                 ctx.info("Successfully retrieved full text from Zotero's index")
                 full_response = f"{metadata}\n\n---\n\n## Full Text\n\n{full_text_data['content']}"
                 
-                # Check if response needs chunking
-                chunker = get_response_chunker()
-                if chunker.should_chunk(full_response):
-                    ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
-                    chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": item_key})
-                    
-                    # Format chunked response for MCP
-                    if chunked_response.get("chunked"):
-                        chunk_info = [
-                            "# ⚠️ Response Chunked",
-                            f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
-                            f"Current chunk: 1 of {chunked_response['total_chunks']}",
-                            "",
-                            "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
-                            f"Continuation token: `{chunked_response.get('continuation_token')}`",
-                            "",
-                            "---",
-                            "",
-                            chunked_response["content"]
-                        ]
-                        return "\n".join(chunk_info)
+                # Check if response needs chunking (only if feature is enabled)
+                if is_feature_enabled(FEATURE_RESPONSE_CHUNKING):
+                    chunker = get_response_chunker()
+                    if chunker.should_chunk(full_response):
+                        ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
+                        chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": item_key})
+                        
+                        # Format chunked response for MCP
+                        if chunked_response.get("chunked"):
+                            chunk_info = [
+                                "# ⚠️ Response Chunked",
+                                f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                                f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                                "",
+                                "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                                f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                                "",
+                                "---",
+                                "",
+                                chunked_response["content"]
+                            ]
+                            return "\n".join(chunk_info)
                 
                 return full_response
         except Exception as fulltext_error:
@@ -472,27 +476,28 @@ def get_item_fulltext(
                     converted_text = convert_to_markdown(file_path)
                     full_response = f"{metadata}\n\n---\n\n## Full Text\n\n{converted_text}"
                     
-                    # Check if response needs chunking
-                    chunker = get_response_chunker()
-                    if chunker.should_chunk(full_response):
-                        ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
-                        chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": item_key})
-                        
-                        # Format chunked response for MCP
-                        if chunked_response.get("chunked"):
-                            chunk_info = [
-                                "# ⚠️ Response Chunked",
-                                f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
-                                f"Current chunk: 1 of {chunked_response['total_chunks']}",
-                                "",
-                                "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
-                                f"Continuation token: `{chunked_response.get('continuation_token')}`",
-                                "",
-                                "---",
-                                "",
-                                chunked_response["content"]
-                            ]
-                            return "\n".join(chunk_info)
+                    # Check if response needs chunking (only if feature is enabled)
+                    if is_feature_enabled(FEATURE_RESPONSE_CHUNKING):
+                        chunker = get_response_chunker()
+                        if chunker.should_chunk(full_response):
+                            ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
+                            chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": item_key})
+                            
+                            # Format chunked response for MCP
+                            if chunked_response.get("chunked"):
+                                chunk_info = [
+                                    "# ⚠️ Response Chunked",
+                                    f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                                    f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                                    "",
+                                    "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                                    f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                                    "",
+                                    "---",
+                                    "",
+                                    chunked_response["content"]
+                                ]
+                                return "\n".join(chunk_info)
                     
                     return full_response
                 else:
@@ -501,27 +506,28 @@ def get_item_fulltext(
             ctx.error(f"Error downloading/converting file: {str(download_error)}")
             full_response = f"{metadata}\n\n---\n\nError accessing attachment: {str(download_error)}"
             
-            # Check if response needs chunking even for error cases with metadata
-            chunker = get_response_chunker()
-            if chunker.should_chunk(full_response):
-                ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
-                chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": item_key})
-                
-                # Format chunked response for MCP
-                if chunked_response.get("chunked"):
-                    chunk_info = [
-                        "# ⚠️ Response Chunked",
-                        f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
-                        f"Current chunk: 1 of {chunked_response['total_chunks']}",
-                        "",
-                        "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
-                        f"Continuation token: `{chunked_response.get('continuation_token')}`",
-                        "",
-                        "---",
-                        "",
-                        chunked_response["content"]
-                    ]
-                    return "\n".join(chunk_info)
+            # Check if response needs chunking even for error cases with metadata (only if feature is enabled)
+            if is_feature_enabled(FEATURE_RESPONSE_CHUNKING):
+                chunker = get_response_chunker()
+                if chunker.should_chunk(full_response):
+                    ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
+                    chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": item_key})
+                    
+                    # Format chunked response for MCP
+                    if chunked_response.get("chunked"):
+                        chunk_info = [
+                            "# ⚠️ Response Chunked",
+                            f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                            f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                            "",
+                            "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                            f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                            "",
+                            "---",
+                            "",
+                            chunked_response["content"]
+                        ]
+                        return "\n".join(chunk_info)
             
             return full_response
         
@@ -550,6 +556,10 @@ def get_next_chunk(
         The next chunk of content or an error message
     """
     try:
+        # Check if chunking feature is enabled
+        if not is_feature_enabled(FEATURE_RESPONSE_CHUNKING):
+            return "Error: Response chunking feature is not enabled. Enable it by setting ZOTERO_RESPONSE_CHUNKING=true in your environment."
+        
         ctx.info(f"Fetching next chunk with token: {continuation_token}")
         
         # Get the response chunker instance
