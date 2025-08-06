@@ -22,6 +22,8 @@ from zotero_mcp.client import (
     get_zotero_client,
 )
 from zotero_mcp.utils import format_creators
+from zotero_mcp.response_chunker import get_response_chunker
+from zotero_mcp.token_estimator import estimate_tokens
 
 
 @asynccontextmanager
@@ -70,7 +72,7 @@ mcp = FastMCP(
 
 @mcp.tool(
     name="zotero_search_items",
-    description="Search for items in your Zotero library, given a query string."
+    description="Search for items in your Zotero library, given a query string. Large responses are automatically chunked."
 )
 def search_items(
     query: str,
@@ -153,7 +155,32 @@ def search_items(
             
             output.append("")  # Empty line between items
         
-        return "\n".join(output)
+        # Join the output to create final response
+        response = "\n".join(output)
+        
+        # Check if response needs chunking
+        chunker = get_response_chunker()
+        if chunker.should_chunk(response):
+            ctx.info(f"Response exceeds token limit ({estimate_tokens(response)} tokens), chunking...")
+            chunked_response = chunker.chunk_response(response, context={"type": "search_results"})
+            
+            # Format chunked response for MCP
+            if chunked_response.get("chunked"):
+                chunk_info = [
+                    "# ⚠️ Response Chunked",
+                    f"This response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                    f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                    "",
+                    "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                    f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                    "",
+                    "---",
+                    "",
+                    chunked_response["content"]
+                ]
+                return "\n".join(chunk_info)
+        
+        return response
     
     except Exception as e:
         ctx.error(f"Error searching Zotero: {str(e)}")
@@ -293,7 +320,7 @@ def get_item_metadata(
 
 @mcp.tool(
     name="zotero_get_item_fulltext",
-    description="Get the full text content of a Zotero item by its key."
+    description="Get the full text content of a Zotero item by its key. Large responses are automatically chunked."
 )
 def get_item_fulltext(
     item_key: str,
@@ -334,7 +361,31 @@ def get_item_fulltext(
             full_text_data = zot.fulltext_item(attachment.key)
             if full_text_data and "content" in full_text_data and full_text_data["content"]:
                 ctx.info("Successfully retrieved full text from Zotero's index")
-                return f"{metadata}\n\n---\n\n## Full Text\n\n{full_text_data['content']}"
+                full_response = f"{metadata}\n\n---\n\n## Full Text\n\n{full_text_data['content']}"
+                
+                # Check if response needs chunking
+                chunker = get_response_chunker()
+                if chunker.should_chunk(full_response):
+                    ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
+                    chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": item_key})
+                    
+                    # Format chunked response for MCP
+                    if chunked_response.get("chunked"):
+                        chunk_info = [
+                            "# ⚠️ Response Chunked",
+                            f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                            f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                            "",
+                            "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                            f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                            "",
+                            "---",
+                            "",
+                            chunked_response["content"]
+                        ]
+                        return "\n".join(chunk_info)
+                
+                return full_response
         except Exception as fulltext_error:
             ctx.info(f"Couldn't retrieve indexed full text: {str(fulltext_error)}")
         
@@ -353,16 +404,132 @@ def get_item_fulltext(
                 if os.path.exists(file_path):
                     ctx.info(f"Downloaded file to {file_path}, converting to markdown")
                     converted_text = convert_to_markdown(file_path)
-                    return f"{metadata}\n\n---\n\n## Full Text\n\n{converted_text}"
+                    full_response = f"{metadata}\n\n---\n\n## Full Text\n\n{converted_text}"
+                    
+                    # Check if response needs chunking
+                    chunker = get_response_chunker()
+                    if chunker.should_chunk(full_response):
+                        ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
+                        chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": item_key})
+                        
+                        # Format chunked response for MCP
+                        if chunked_response.get("chunked"):
+                            chunk_info = [
+                                "# ⚠️ Response Chunked",
+                                f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                                f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                                "",
+                                "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                                f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                                "",
+                                "---",
+                                "",
+                                chunked_response["content"]
+                            ]
+                            return "\n".join(chunk_info)
+                    
+                    return full_response
                 else:
                     return f"{metadata}\n\n---\n\nFile download failed."
         except Exception as download_error:
             ctx.error(f"Error downloading/converting file: {str(download_error)}")
-            return f"{metadata}\n\n---\n\nError accessing attachment: {str(download_error)}"
+            full_response = f"{metadata}\n\n---\n\nError accessing attachment: {str(download_error)}"
+            
+            # Check if response needs chunking even for error cases with metadata
+            chunker = get_response_chunker()
+            if chunker.should_chunk(full_response):
+                ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
+                chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": item_key})
+                
+                # Format chunked response for MCP
+                if chunked_response.get("chunked"):
+                    chunk_info = [
+                        "# ⚠️ Response Chunked",
+                        f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                        f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                        "",
+                        "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                        f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                        "",
+                        "---",
+                        "",
+                        chunked_response["content"]
+                    ]
+                    return "\n".join(chunk_info)
+            
+            return full_response
         
     except Exception as e:
         ctx.error(f"Error fetching item full text: {str(e)}")
         return f"Error fetching item full text: {str(e)}"
+
+
+@mcp.tool(
+    name="zotero_get_next_chunk",
+    description="Get the next chunk of a previously chunked response using a continuation token."
+)
+def get_next_chunk(
+    continuation_token: str,
+    *,
+    ctx: Context
+) -> str:
+    """
+    Get the next chunk of a chunked response.
+    
+    Args:
+        continuation_token: The token provided in the previous chunk response
+        ctx: MCP context
+    
+    Returns:
+        The next chunk of content or an error message
+    """
+    try:
+        ctx.info(f"Fetching next chunk with token: {continuation_token}")
+        
+        # Get the response chunker instance
+        chunker = get_response_chunker()
+        
+        # Get the next chunk
+        result = chunker.get_next_chunk(continuation_token)
+        
+        # Check for errors
+        if "error" in result:
+            return f"Error retrieving chunk: {result['error']}"
+        
+        # Format the response
+        if result.get("chunked"):
+            chunk_info = [
+                "# ⚠️ Response Chunk",
+                f"Chunk {result['current_chunk'] + 1} of {result['total_chunks']}",
+                ""
+            ]
+            
+            if result.get("continuation_token"):
+                chunk_info.extend([
+                    "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                    f"Continuation token: `{result['continuation_token']}`",
+                    ""
+                ])
+            else:
+                chunk_info.extend([
+                    "This is the final chunk.",
+                    ""
+                ])
+            
+            chunk_info.extend([
+                "---",
+                "",
+                result["content"]
+            ])
+            
+            return "\n".join(chunk_info)
+        
+        # This shouldn't happen, but handle it gracefully
+        return result.get("content", "No content available")
+    
+    except Exception as e:
+        ctx.error(f"Error getting next chunk: {str(e)}")
+        return f"Error getting next chunk: {str(e)}"
 
 
 @mcp.tool(
