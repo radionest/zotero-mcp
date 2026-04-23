@@ -98,7 +98,7 @@ def _get_webdav_config() -> WebDAVConfig:
         if token := os.getenv("ZOTERO_YANDEX_TOKEN"):
             config["token"] = token
     
-    if root_path := os.getenv("ZOTERO_WEBDAV_ROOT_PATH", "ZOTERO_YANDEX_ROOT_PATH"):
+    if root_path := os.getenv("ZOTERO_WEBDAV_ROOT_PATH") or os.getenv("ZOTERO_YANDEX_ROOT_PATH"):
         config["root_path"] = root_path
     
     return config
