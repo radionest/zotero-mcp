@@ -18,6 +18,7 @@ from zotero_mcp.client import (
     convert_to_markdown,
     format_item_metadata,
     generate_bibtex,
+    get_all_attachment_details,
     get_attachment_details,
     get_zotero_client,
     get_hybrid_zotero_client,
@@ -883,6 +884,203 @@ def get_item_children(
     except Exception as e:
         ctx.error(f"Error fetching item children: {str(e)}")
         return f"Error fetching item children: {str(e)}"
+
+
+@mcp.tool(
+    name="zotero_get_item_attachments",
+    description="List all attachments for a Zotero item. Use with get_attachment_fulltext to read a specific attachment."
+)
+def get_item_attachments(
+    item_key: str,
+    *,
+    ctx: Context
+) -> str:
+    """
+    List all attachments for a Zotero item with keys for targeted access.
+
+    Args:
+        item_key: Zotero item key/ID
+        ctx: MCP context
+
+    Returns:
+        Markdown-formatted list of attachments
+    """
+    try:
+        ctx.info(f"Fetching attachments for item {item_key}")
+        zot = _get_zotero_client_with_features()
+
+        item = zot.item(item_key)
+        if not item:
+            return f"No item found with key: {item_key}"
+
+        parent_title = item["data"].get("title", "Untitled Item")
+        attachments = get_all_attachment_details(zot, item)
+
+        output = [f"# Attachments for: {parent_title}", f"**Item key:** {item_key}", ""]
+
+        if not attachments:
+            output.append("No attachments found.")
+            return "\n".join(output)
+
+        output.append(f"Found {len(attachments)} attachment(s). Use `zotero_get_attachment_fulltext(attachment_key)` to read content.")
+        output.append("")
+
+        for i, att in enumerate(attachments, 1):
+            output.append(f"{i}. **{att.title}**")
+            output.append(f"   - Key: `{att.key}`")
+            output.append(f"   - Type: {att.content_type}")
+            if att.filename:
+                output.append(f"   - Filename: {att.filename}")
+            output.append("")
+
+        return "\n".join(output)
+
+    except Exception as e:
+        ctx.error(f"Error fetching attachments: {str(e)}")
+        return f"Error fetching attachments: {str(e)}"
+
+
+@mcp.tool(
+    name="zotero_get_attachment_fulltext",
+    description="Get full text from a specific attachment by its key. Use get_item_attachments to discover attachment keys."
+)
+def get_attachment_fulltext(
+    attachment_key: str,
+    *,
+    ctx: Context
+) -> str:
+    """
+    Get full text content from a specific Zotero attachment.
+
+    Args:
+        attachment_key: The attachment key (from get_item_attachments or get_item_children)
+        ctx: MCP context
+
+    Returns:
+        Markdown-formatted attachment full text
+    """
+    try:
+        ctx.info(f"Fetching full text for attachment {attachment_key}")
+        zot = _get_zotero_client_with_features()
+
+        attachment_item = zot.item(attachment_key)
+        if not attachment_item:
+            return f"No item found with key: {attachment_key}"
+
+        att_data = attachment_item.get("data", {})
+        if att_data.get("itemType") != "attachment":
+            return f"Error: Item {attachment_key} is not an attachment (type: {att_data.get('itemType')}). Use get_item_fulltext instead."
+
+        attachment = AttachmentDetails(
+            key=attachment_key,
+            title=att_data.get("title", "Untitled"),
+            filename=att_data.get("filename", ""),
+            content_type=att_data.get("contentType", ""),
+        )
+
+        # Get parent item metadata for context
+        parent_key = att_data.get("parentItem")
+        if parent_key:
+            try:
+                parent_item = zot.item(parent_key)
+                metadata = format_item_metadata(parent_item, include_abstract=True)
+                metadata += f"\n\n**Attachment:** {attachment.title} (`{attachment.key}`)"
+            except Exception:
+                metadata = f"# {attachment.title}\n**Key:** {attachment_key}\n**Type:** {attachment.content_type}"
+        else:
+            metadata = f"# {attachment.title}\n**Key:** {attachment_key}\n**Type:** {attachment.content_type}"
+
+        ctx.info(f"Found attachment: {attachment.key} ({attachment.content_type})")
+
+        # Try fetching full text from Zotero's full text index first
+        try:
+            full_text_data = zot.fulltext_item(attachment.key)
+            if full_text_data and "content" in full_text_data and full_text_data["content"]:
+                ctx.info("Successfully retrieved full text from Zotero's index")
+                full_response = f"{metadata}\n\n---\n\n## Full Text\n\n{full_text_data['content']}"
+
+                if is_feature_enabled(FEATURE_RESPONSE_CHUNKING):
+                    chunker = get_response_chunker()
+                    if chunker.should_chunk(full_response):
+                        ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
+                        chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": attachment_key})
+                        if chunked_response.get("chunked"):
+                            chunk_info = [
+                                "# Response Chunked",
+                                f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                                f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                                "",
+                                f"To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                                f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                                "",
+                                "---",
+                                "",
+                                chunked_response["content"]
+                            ]
+                            return "\n".join(chunk_info)
+
+                return full_response
+        except Exception as fulltext_error:
+            ctx.info(f"Couldn't retrieve indexed full text: {str(fulltext_error)}")
+
+        # Try storage backend if WebDAV feature is enabled
+        try:
+            ctx.info(f"Attempting to download and convert attachment {attachment.key}")
+
+            if is_feature_enabled(FEATURE_WEBDAV_STORAGE):
+                from zotero_mcp.client import get_storage_backend
+                storage = get_storage_backend()
+
+                if storage and storage.exists(attachment.key):
+                    ctx.info(f"Trying to retrieve attachment from {storage.get_storage_info()['type']} storage")
+                    file_path = storage.get_attachment(attachment.key)
+                    if file_path and file_path.exists():
+                        ctx.info(f"Retrieved file from storage, converting to markdown")
+                        converted_text = convert_to_markdown(file_path)
+                        return f"{metadata}\n\n---\n\n## Full Text\n\n{converted_text}"
+
+            # Fall back to direct download from Zotero
+            ctx.info("Trying direct download from Zotero")
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                file_path = os.path.join(tmpdir, attachment.filename or f"{attachment.key}.pdf")
+                zot.dump(attachment.key, filename=os.path.basename(file_path), path=tmpdir)
+
+                if os.path.exists(file_path):
+                    ctx.info(f"Downloaded file to {file_path}, converting to markdown")
+                    converted_text = convert_to_markdown(file_path)
+                    full_response = f"{metadata}\n\n---\n\n## Full Text\n\n{converted_text}"
+
+                    if is_feature_enabled(FEATURE_RESPONSE_CHUNKING):
+                        chunker = get_response_chunker()
+                        if chunker.should_chunk(full_response):
+                            ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
+                            chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": attachment_key})
+                            if chunked_response.get("chunked"):
+                                chunk_info = [
+                                    "# Response Chunked",
+                                    f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                                    f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                                    "",
+                                    f"To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                                    f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                                    "",
+                                    "---",
+                                    "",
+                                    chunked_response["content"]
+                                ]
+                                return "\n".join(chunk_info)
+
+                    return full_response
+                else:
+                    return f"{metadata}\n\n---\n\nFile download failed."
+        except Exception as download_error:
+            ctx.error(f"Error downloading/converting file: {str(download_error)}")
+            return f"{metadata}\n\n---\n\nError accessing attachment: {str(download_error)}"
+
+    except Exception as e:
+        ctx.error(f"Error fetching attachment full text: {str(e)}")
+        return f"Error fetching attachment full text: {str(e)}"
 
 
 @mcp.tool(

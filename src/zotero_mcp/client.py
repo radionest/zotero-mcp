@@ -421,6 +421,76 @@ def get_attachment_details(
     return None
 
 
+def get_all_attachment_details(
+    zot: Union[zotero.Zotero, Any], item: Dict[str, Any]
+) -> List[AttachmentDetails]:
+    """
+    Get all attachment details for a Zotero item, sorted by priority.
+
+    Returns attachments in priority order: PDFs first (largest to smallest),
+    then HTML, then other types.
+    """
+    data = item.get("data", {})
+    item_type = data.get("itemType")
+    item_key = data.get("key")
+
+    if item_type == "attachment":
+        return [AttachmentDetails(
+            key=item_key,
+            title=data.get("title", "Untitled"),
+            filename=data.get("filename", ""),
+            content_type=data.get("contentType", ""),
+        )]
+
+    try:
+        if is_feature_enabled(FEATURE_RATE_LIMITER) and not hasattr(zot, '_client'):
+            try:
+                from zotero_mcp.rate_limiter import RateLimitedZoteroClient
+                zot = RateLimitedZoteroClient(zot)
+            except ImportError:
+                pass
+
+        children = zot.children(item_key)
+
+        pdfs = []
+        htmls = []
+        others = []
+
+        for child in children:
+            child_data = child.get("data", {})
+            if child_data.get("itemType") == "attachment":
+                content_type = child_data.get("contentType", "")
+                filename = child_data.get("filename", "")
+                title = child_data.get("title", "Untitled")
+                key = child.get("key", "")
+                size_proxy = len(child_data.get("md5", ""))
+
+                attachment = (key, title, filename, content_type, size_proxy)
+
+                if content_type == "application/pdf":
+                    pdfs.append(attachment)
+                elif content_type.startswith("text/html"):
+                    htmls.append(attachment)
+                else:
+                    others.append(attachment)
+
+        result = []
+        for category in [pdfs, htmls, others]:
+            category.sort(key=lambda x: x[4], reverse=True)
+            for key, title, filename, content_type, _ in category:
+                result.append(AttachmentDetails(
+                    key=key,
+                    title=title,
+                    filename=filename,
+                    content_type=content_type,
+                ))
+        return result
+    except Exception:
+        pass
+
+    return []
+
+
 def convert_to_markdown(file_path: Union[str, Path]) -> str:
     """
     Convert a file to markdown using markitdown library.
