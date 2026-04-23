@@ -1,0 +1,56 @@
+name: Branch Protection
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  check-direct-push:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Block direct push to main
+        run: |
+          echo "❌ Direct pushes to main branch are forbidden!"
+          echo "Main branch is sacred and must only be updated via pull requests."
+          echo "Please create a feature branch and submit a PR."
+          exit 1
+
+  validate-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        
+      - name: Check PR source branch
+        run: |
+          if [[ "${{ github.head_ref }}" != "dev" ]]; then
+            echo "⚠️  Warning: PRs to main should typically come from dev branch"
+            echo "Current branch: ${{ github.head_ref }}"
+          fi
+          
+      - name: Validate commit messages
+        run: |
+          echo "Checking commit messages in PR..."
+          commits=$(git log origin/main..HEAD --pretty=format:"%s")
+          
+          # Regex for conventional commits
+          commit_regex='^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\(.+\))?: .{1,72}$'
+          
+          invalid_commits=0
+          while IFS= read -r commit; do
+            if ! echo "$commit" | grep -qE "$commit_regex"; then
+              echo "❌ Invalid commit message: $commit"
+              invalid_commits=$((invalid_commits + 1))
+            fi
+          done <<< "$commits"
+          
+          if [ $invalid_commits -gt 0 ]; then
+            echo "Found $invalid_commits invalid commit messages"
+            echo "Please use conventional commit format: type(scope): description"
+            exit 1
+          fi
+          
+          echo "✅ All commit messages are valid"

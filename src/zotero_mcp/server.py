@@ -18,10 +18,65 @@ from zotero_mcp.client import (
     convert_to_markdown,
     format_item_metadata,
     generate_bibtex,
+    get_all_attachment_details,
     get_attachment_details,
     get_zotero_client,
+    get_hybrid_zotero_client,
 )
 from zotero_mcp.utils import format_creators
+from zotero_mcp.response_chunker import get_response_chunker
+from zotero_mcp.token_estimator import estimate_tokens
+
+# Try to import feature flags (fork-only)
+try:
+    from zotero_mcp.feature_flags import (
+        is_feature_enabled,
+        get_feature_config,
+        FEATURE_HYBRID_CLIENT,
+        FEATURE_RATE_LIMITER,
+        FEATURE_WEBDAV_STORAGE,
+        FEATURE_RESPONSE_CHUNKING,
+    )
+except ImportError:
+    # Feature flags not available - we're in upstream
+    def is_feature_enabled(feature: str) -> bool:
+        return False
+    
+    def get_feature_config(feature: str) -> Optional[Dict[str, Any]]:
+        return None
+    
+    # Feature constants for consistency
+    FEATURE_HYBRID_CLIENT = "ZOTERO_HYBRID_CLIENT"
+    FEATURE_RATE_LIMITER = "ZOTERO_RATE_LIMITER"
+    FEATURE_WEBDAV_STORAGE = "ZOTERO_WEBDAV_STORAGE"
+    FEATURE_RESPONSE_CHUNKING = "ZOTERO_RESPONSE_CHUNKING"
+
+
+def _get_zotero_client_with_features():
+    """
+    Get Zotero client with optional feature wrappers.
+    FORK-ONLY: This applies rate limiting and hybrid client features if enabled.
+    
+    Returns:
+        Zotero client instance (possibly wrapped)
+    """
+    # Check if hybrid client should be used
+    if is_feature_enabled(FEATURE_HYBRID_CLIENT):
+        # Use the hybrid client getter which handles the feature flag
+        client = get_hybrid_zotero_client()
+    else:
+        client = get_zotero_client()
+    
+    # Apply rate limiting if feature is enabled
+    if is_feature_enabled(FEATURE_RATE_LIMITER):
+        try:
+            from zotero_mcp.rate_limiter import RateLimitedZoteroClient
+            return RateLimitedZoteroClient(client)
+        except ImportError:
+            # Rate limiter not available, return unwrapped client
+            pass
+    
+    return client
 
 
 @asynccontextmanager
@@ -70,7 +125,7 @@ mcp = FastMCP(
 
 @mcp.tool(
     name="zotero_search_items",
-    description="Search for items in your Zotero library, given a query string."
+    description="Search for items in your Zotero library, given a query string. Large responses are automatically chunked."
 )
 def search_items(
     query: str,
@@ -106,7 +161,7 @@ def search_items(
             tag = []
 
         ctx.info(f"Searching Zotero for '{query}'{tag_condition_str}")
-        zot = get_zotero_client()
+        zot = _get_zotero_client_with_features()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -153,7 +208,33 @@ def search_items(
             
             output.append("")  # Empty line between items
         
-        return "\n".join(output)
+        # Join the output to create final response
+        response = "\n".join(output)
+        
+        # Check if response needs chunking (only if feature is enabled)
+        if is_feature_enabled(FEATURE_RESPONSE_CHUNKING):
+            chunker = get_response_chunker()
+            if chunker.should_chunk(response):
+                ctx.info(f"Response exceeds token limit ({estimate_tokens(response)} tokens), chunking...")
+                chunked_response = chunker.chunk_response(response, context={"type": "search_results"})
+                
+                # Format chunked response for MCP
+                if chunked_response.get("chunked"):
+                    chunk_info = [
+                        "# ⚠️ Response Chunked",
+                        f"This response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                        f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                        "",
+                        "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                        f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                        "",
+                        "---",
+                        "",
+                        chunked_response["content"]
+                    ]
+                    return "\n".join(chunk_info)
+        
+        return response
     
     except Exception as e:
         ctx.error(f"Error searching Zotero: {str(e)}")
@@ -197,7 +278,7 @@ def search_by_tag(
             return "Error: Tag cannot be empty"
 
         ctx.info(f"Searching Zotero for tag '{tag}'")
-        zot = get_zotero_client()
+        zot = _get_zotero_client_with_features()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -275,7 +356,7 @@ def get_item_metadata(
     """
     try:
         ctx.info(f"Fetching metadata for item {item_key} in {format} format")
-        zot = get_zotero_client()
+        zot = _get_zotero_client_with_features()
         
         item = zot.item(item_key)
         if not item:
@@ -293,7 +374,7 @@ def get_item_metadata(
 
 @mcp.tool(
     name="zotero_get_item_fulltext",
-    description="Get the full text content of a Zotero item by its key."
+    description="Get the full text content of a Zotero item by its key. Large responses are automatically chunked."
 )
 def get_item_fulltext(
     item_key: str,
@@ -312,7 +393,7 @@ def get_item_fulltext(
     """
     try:
         ctx.info(f"Fetching full text for item {item_key}")
-        zot = get_zotero_client()
+        zot = _get_zotero_client_with_features()
         
         # First get the item metadata
         item = zot.item(item_key)
@@ -334,13 +415,54 @@ def get_item_fulltext(
             full_text_data = zot.fulltext_item(attachment.key)
             if full_text_data and "content" in full_text_data and full_text_data["content"]:
                 ctx.info("Successfully retrieved full text from Zotero's index")
-                return f"{metadata}\n\n---\n\n## Full Text\n\n{full_text_data['content']}"
+                full_response = f"{metadata}\n\n---\n\n## Full Text\n\n{full_text_data['content']}"
+                
+                # Check if response needs chunking (only if feature is enabled)
+                if is_feature_enabled(FEATURE_RESPONSE_CHUNKING):
+                    chunker = get_response_chunker()
+                    if chunker.should_chunk(full_response):
+                        ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
+                        chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": item_key})
+                        
+                        # Format chunked response for MCP
+                        if chunked_response.get("chunked"):
+                            chunk_info = [
+                                "# ⚠️ Response Chunked",
+                                f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                                f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                                "",
+                                "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                                f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                                "",
+                                "---",
+                                "",
+                                chunked_response["content"]
+                            ]
+                            return "\n".join(chunk_info)
+                
+                return full_response
         except Exception as fulltext_error:
             ctx.info(f"Couldn't retrieve indexed full text: {str(fulltext_error)}")
         
         # If we couldn't get indexed full text, try to download and convert the file
         try:
             ctx.info(f"Attempting to download and convert attachment {attachment.key}")
+            
+            # Try storage backend first if WebDAV feature is enabled
+            if is_feature_enabled(FEATURE_WEBDAV_STORAGE):
+                from zotero_mcp.client import get_storage_backend
+                storage = get_storage_backend()
+                
+                if storage and storage.exists(attachment.key):
+                    ctx.info(f"Trying to retrieve attachment from {storage.get_storage_info()['type']} storage")
+                    file_path = storage.get_attachment(attachment.key)
+                    if file_path and file_path.exists():
+                        ctx.info(f"Retrieved file from storage, converting to markdown")
+                        converted_text = convert_to_markdown(file_path)
+                        return f"{metadata}\n\n---\n\n## Full Text\n\n{converted_text}"
+            
+            # Fall back to direct download from Zotero
+            ctx.info("Trying direct download from Zotero")
             
             # Download the file to a temporary location
             import tempfile
@@ -353,16 +475,138 @@ def get_item_fulltext(
                 if os.path.exists(file_path):
                     ctx.info(f"Downloaded file to {file_path}, converting to markdown")
                     converted_text = convert_to_markdown(file_path)
-                    return f"{metadata}\n\n---\n\n## Full Text\n\n{converted_text}"
+                    full_response = f"{metadata}\n\n---\n\n## Full Text\n\n{converted_text}"
+                    
+                    # Check if response needs chunking (only if feature is enabled)
+                    if is_feature_enabled(FEATURE_RESPONSE_CHUNKING):
+                        chunker = get_response_chunker()
+                        if chunker.should_chunk(full_response):
+                            ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
+                            chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": item_key})
+                            
+                            # Format chunked response for MCP
+                            if chunked_response.get("chunked"):
+                                chunk_info = [
+                                    "# ⚠️ Response Chunked",
+                                    f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                                    f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                                    "",
+                                    "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                                    f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                                    "",
+                                    "---",
+                                    "",
+                                    chunked_response["content"]
+                                ]
+                                return "\n".join(chunk_info)
+                    
+                    return full_response
                 else:
                     return f"{metadata}\n\n---\n\nFile download failed."
         except Exception as download_error:
             ctx.error(f"Error downloading/converting file: {str(download_error)}")
-            return f"{metadata}\n\n---\n\nError accessing attachment: {str(download_error)}"
+            full_response = f"{metadata}\n\n---\n\nError accessing attachment: {str(download_error)}"
+            
+            # Check if response needs chunking even for error cases with metadata (only if feature is enabled)
+            if is_feature_enabled(FEATURE_RESPONSE_CHUNKING):
+                chunker = get_response_chunker()
+                if chunker.should_chunk(full_response):
+                    ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
+                    chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": item_key})
+                    
+                    # Format chunked response for MCP
+                    if chunked_response.get("chunked"):
+                        chunk_info = [
+                            "# ⚠️ Response Chunked",
+                            f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                            f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                            "",
+                            "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                            f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                            "",
+                            "---",
+                            "",
+                            chunked_response["content"]
+                        ]
+                        return "\n".join(chunk_info)
+            
+            return full_response
         
     except Exception as e:
         ctx.error(f"Error fetching item full text: {str(e)}")
         return f"Error fetching item full text: {str(e)}"
+
+
+@mcp.tool(
+    name="zotero_get_next_chunk",
+    description="Get the next chunk of a previously chunked response using a continuation token."
+)
+def get_next_chunk(
+    continuation_token: str,
+    *,
+    ctx: Context
+) -> str:
+    """
+    Get the next chunk of a chunked response.
+    
+    Args:
+        continuation_token: The token provided in the previous chunk response
+        ctx: MCP context
+    
+    Returns:
+        The next chunk of content or an error message
+    """
+    try:
+        # Check if chunking feature is enabled
+        if not is_feature_enabled(FEATURE_RESPONSE_CHUNKING):
+            return "Error: Response chunking feature is not enabled. Enable it by setting ZOTERO_RESPONSE_CHUNKING=true in your environment."
+        
+        ctx.info(f"Fetching next chunk with token: {continuation_token}")
+        
+        # Get the response chunker instance
+        chunker = get_response_chunker()
+        
+        # Get the next chunk
+        result = chunker.get_next_chunk(continuation_token)
+        
+        # Check for errors
+        if "error" in result:
+            return f"Error retrieving chunk: {result['error']}"
+        
+        # Format the response
+        if result.get("chunked"):
+            chunk_info = [
+                "# ⚠️ Response Chunk",
+                f"Chunk {result['current_chunk'] + 1} of {result['total_chunks']}",
+                ""
+            ]
+            
+            if result.get("continuation_token"):
+                chunk_info.extend([
+                    "To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                    f"Continuation token: `{result['continuation_token']}`",
+                    ""
+                ])
+            else:
+                chunk_info.extend([
+                    "This is the final chunk.",
+                    ""
+                ])
+            
+            chunk_info.extend([
+                "---",
+                "",
+                result["content"]
+            ])
+            
+            return "\n".join(chunk_info)
+        
+        # This shouldn't happen, but handle it gracefully
+        return result.get("content", "No content available")
+    
+    except Exception as e:
+        ctx.error(f"Error getting next chunk: {str(e)}")
+        return f"Error getting next chunk: {str(e)}"
 
 
 @mcp.tool(
@@ -386,7 +630,7 @@ def get_collections(
     """
     try:
         ctx.info("Fetching collections")
-        zot = get_zotero_client()
+        zot = _get_zotero_client_with_features()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -481,7 +725,7 @@ def get_collection_items(
     """
     try:
         ctx.info(f"Fetching items for collection {collection_key}")
-        zot = get_zotero_client()
+        zot = _get_zotero_client_with_features()
         
         # First get the collection details
         try:
@@ -549,7 +793,7 @@ def get_item_children(
     """
     try:
         ctx.info(f"Fetching children for item {item_key}")
-        zot = get_zotero_client()
+        zot = _get_zotero_client_with_features()
         
         # First get the parent item details
         try:
@@ -643,6 +887,203 @@ def get_item_children(
 
 
 @mcp.tool(
+    name="zotero_get_item_attachments",
+    description="List all attachments for a Zotero item. Use with get_attachment_fulltext to read a specific attachment."
+)
+def get_item_attachments(
+    item_key: str,
+    *,
+    ctx: Context
+) -> str:
+    """
+    List all attachments for a Zotero item with keys for targeted access.
+
+    Args:
+        item_key: Zotero item key/ID
+        ctx: MCP context
+
+    Returns:
+        Markdown-formatted list of attachments
+    """
+    try:
+        ctx.info(f"Fetching attachments for item {item_key}")
+        zot = _get_zotero_client_with_features()
+
+        item = zot.item(item_key)
+        if not item:
+            return f"No item found with key: {item_key}"
+
+        parent_title = item["data"].get("title", "Untitled Item")
+        attachments = get_all_attachment_details(zot, item)
+
+        output = [f"# Attachments for: {parent_title}", f"**Item key:** {item_key}", ""]
+
+        if not attachments:
+            output.append("No attachments found.")
+            return "\n".join(output)
+
+        output.append(f"Found {len(attachments)} attachment(s). Use `zotero_get_attachment_fulltext(attachment_key)` to read content.")
+        output.append("")
+
+        for i, att in enumerate(attachments, 1):
+            output.append(f"{i}. **{att.title}**")
+            output.append(f"   - Key: `{att.key}`")
+            output.append(f"   - Type: {att.content_type}")
+            if att.filename:
+                output.append(f"   - Filename: {att.filename}")
+            output.append("")
+
+        return "\n".join(output)
+
+    except Exception as e:
+        ctx.error(f"Error fetching attachments: {str(e)}")
+        return f"Error fetching attachments: {str(e)}"
+
+
+@mcp.tool(
+    name="zotero_get_attachment_fulltext",
+    description="Get full text from a specific attachment by its key. Use get_item_attachments to discover attachment keys."
+)
+def get_attachment_fulltext(
+    attachment_key: str,
+    *,
+    ctx: Context
+) -> str:
+    """
+    Get full text content from a specific Zotero attachment.
+
+    Args:
+        attachment_key: The attachment key (from get_item_attachments or get_item_children)
+        ctx: MCP context
+
+    Returns:
+        Markdown-formatted attachment full text
+    """
+    try:
+        ctx.info(f"Fetching full text for attachment {attachment_key}")
+        zot = _get_zotero_client_with_features()
+
+        attachment_item = zot.item(attachment_key)
+        if not attachment_item:
+            return f"No item found with key: {attachment_key}"
+
+        att_data = attachment_item.get("data", {})
+        if att_data.get("itemType") != "attachment":
+            return f"Error: Item {attachment_key} is not an attachment (type: {att_data.get('itemType')}). Use get_item_fulltext instead."
+
+        attachment = AttachmentDetails(
+            key=attachment_key,
+            title=att_data.get("title", "Untitled"),
+            filename=att_data.get("filename", ""),
+            content_type=att_data.get("contentType", ""),
+        )
+
+        # Get parent item metadata for context
+        parent_key = att_data.get("parentItem")
+        if parent_key:
+            try:
+                parent_item = zot.item(parent_key)
+                metadata = format_item_metadata(parent_item, include_abstract=True)
+                metadata += f"\n\n**Attachment:** {attachment.title} (`{attachment.key}`)"
+            except Exception:
+                metadata = f"# {attachment.title}\n**Key:** {attachment_key}\n**Type:** {attachment.content_type}"
+        else:
+            metadata = f"# {attachment.title}\n**Key:** {attachment_key}\n**Type:** {attachment.content_type}"
+
+        ctx.info(f"Found attachment: {attachment.key} ({attachment.content_type})")
+
+        # Try fetching full text from Zotero's full text index first
+        try:
+            full_text_data = zot.fulltext_item(attachment.key)
+            if full_text_data and "content" in full_text_data and full_text_data["content"]:
+                ctx.info("Successfully retrieved full text from Zotero's index")
+                full_response = f"{metadata}\n\n---\n\n## Full Text\n\n{full_text_data['content']}"
+
+                if is_feature_enabled(FEATURE_RESPONSE_CHUNKING):
+                    chunker = get_response_chunker()
+                    if chunker.should_chunk(full_response):
+                        ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
+                        chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": attachment_key})
+                        if chunked_response.get("chunked"):
+                            chunk_info = [
+                                "# Response Chunked",
+                                f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                                f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                                "",
+                                f"To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                                f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                                "",
+                                "---",
+                                "",
+                                chunked_response["content"]
+                            ]
+                            return "\n".join(chunk_info)
+
+                return full_response
+        except Exception as fulltext_error:
+            ctx.info(f"Couldn't retrieve indexed full text: {str(fulltext_error)}")
+
+        # Try storage backend if WebDAV feature is enabled
+        try:
+            ctx.info(f"Attempting to download and convert attachment {attachment.key}")
+
+            if is_feature_enabled(FEATURE_WEBDAV_STORAGE):
+                from zotero_mcp.client import get_storage_backend
+                storage = get_storage_backend()
+
+                if storage and storage.exists(attachment.key):
+                    ctx.info(f"Trying to retrieve attachment from {storage.get_storage_info()['type']} storage")
+                    file_path = storage.get_attachment(attachment.key)
+                    if file_path and file_path.exists():
+                        ctx.info(f"Retrieved file from storage, converting to markdown")
+                        converted_text = convert_to_markdown(file_path)
+                        return f"{metadata}\n\n---\n\n## Full Text\n\n{converted_text}"
+
+            # Fall back to direct download from Zotero
+            ctx.info("Trying direct download from Zotero")
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                file_path = os.path.join(tmpdir, attachment.filename or f"{attachment.key}.pdf")
+                zot.dump(attachment.key, filename=os.path.basename(file_path), path=tmpdir)
+
+                if os.path.exists(file_path):
+                    ctx.info(f"Downloaded file to {file_path}, converting to markdown")
+                    converted_text = convert_to_markdown(file_path)
+                    full_response = f"{metadata}\n\n---\n\n## Full Text\n\n{converted_text}"
+
+                    if is_feature_enabled(FEATURE_RESPONSE_CHUNKING):
+                        chunker = get_response_chunker()
+                        if chunker.should_chunk(full_response):
+                            ctx.info(f"Full text response exceeds token limit ({estimate_tokens(full_response)} tokens), chunking...")
+                            chunked_response = chunker.chunk_response(full_response, context={"type": "fulltext", "item_key": attachment_key})
+                            if chunked_response.get("chunked"):
+                                chunk_info = [
+                                    "# Response Chunked",
+                                    f"This full text response was too large ({chunked_response['total_tokens']} tokens) and has been split into {chunked_response['total_chunks']} chunks.",
+                                    f"Current chunk: 1 of {chunked_response['total_chunks']}",
+                                    "",
+                                    f"To get the next chunk, use the `zotero_get_next_chunk` tool with the continuation token.",
+                                    f"Continuation token: `{chunked_response.get('continuation_token')}`",
+                                    "",
+                                    "---",
+                                    "",
+                                    chunked_response["content"]
+                                ]
+                                return "\n".join(chunk_info)
+
+                    return full_response
+                else:
+                    return f"{metadata}\n\n---\n\nFile download failed."
+        except Exception as download_error:
+            ctx.error(f"Error downloading/converting file: {str(download_error)}")
+            return f"{metadata}\n\n---\n\nError accessing attachment: {str(download_error)}"
+
+    except Exception as e:
+        ctx.error(f"Error fetching attachment full text: {str(e)}")
+        return f"Error fetching attachment full text: {str(e)}"
+
+
+@mcp.tool(
     name="zotero_get_tags",
     description="Get all tags used in your Zotero library."
 )
@@ -663,7 +1104,7 @@ def get_tags(
     """
     try:
         ctx.info("Fetching tags")
-        zot = get_zotero_client()
+        zot = _get_zotero_client_with_features()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -717,7 +1158,7 @@ def get_recent(
     """
     try:
         ctx.info(f"Fetching {limit} recent items")
-        zot = get_zotero_client()
+        zot = _get_zotero_client_with_features()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -820,7 +1261,7 @@ def batch_update_tags(
                 return f"Error: remove_tags appears to be malformed JSON string: {remove_tags}"
         
         ctx.info(f"Batch updating tags for items matching '{query}'")
-        zot = get_zotero_client()
+        zot = _get_zotero_client_with_features()
         
         if isinstance(limit, str):
             limit = int(limit)
@@ -947,7 +1388,7 @@ def advanced_search(
             return "Error: No search conditions provided"
         
         ctx.info(f"Performing advanced search with {len(conditions)} conditions")
-        zot = get_zotero_client()
+        zot = _get_zotero_client_with_features()
         
         # Prepare search parameters
         params = {}
@@ -1102,7 +1543,7 @@ def get_annotations(
     """
     try:
         # Initialize Zotero client
-        zot = get_zotero_client()
+        zot = _get_zotero_client_with_features()
         
         # Prepare annotations list
         annotations = []
@@ -1405,7 +1846,7 @@ def get_notes(
     """
     try:
         ctx.info(f"Fetching notes{f' for item {item_key}' if item_key else ''}")
-        zot = get_zotero_client()
+        zot = _get_zotero_client_with_features()
         
         # Prepare search parameters
         params = {"itemType": "note"}
@@ -1495,7 +1936,7 @@ def search_notes(
             return "Error: Search query cannot be empty"
         
         ctx.info(f"Searching Zotero notes for '{query}'")
-        zot = get_zotero_client()
+        zot = _get_zotero_client_with_features()
         
         # Search for notes and annotations
         results = []
@@ -1650,7 +2091,7 @@ def create_note(
     """
     try:
         ctx.info(f"Creating note for item {item_key}")
-        zot = get_zotero_client()
+        zot = _get_zotero_client_with_features()
         
         # First verify the parent item exists
         try:

@@ -1,0 +1,29 @@
+#!/bin/bash
+
+# Conventional Commits validation hook
+# https://www.conventionalcommits.org/
+
+commit_regex='^(feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert)(\(.+\))?: .{1,72}$'
+error_msg="❌ Commit message does not follow Conventional Commits format!
+
+Expected format: <type>(<scope>): <description>
+
+Allowed types:
+  feat     : A new feature
+  fix      : A bug fix  
+  docs     : Documentation only changes
+  style    : Changes that do not affect the meaning of the code
+  refactor : A code change that neither fixes a bug nor adds a feature
+  perf     : A code change that improves performance
+  test     : Adding missing tests or correcting existing tests
+  chore    : Changes to the build process or auxiliary tools
+  ci       : Changes to CI configuration files and scripts
+  build    : Changes that affect the build system or external dependencies
+  revert   : Reverts a previous commit
+
+Example: feat(server): add support for batch operations"
+
+if ! grep -qE "$commit_regex" "$1"; then
+    echo "$error_msg" >&2
+    exit 1
+fi
